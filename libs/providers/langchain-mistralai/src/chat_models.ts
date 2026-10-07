@@ -30,6 +30,7 @@ import {
   ToolMessageChunk,
   ChatMessageChunk,
   FunctionMessageChunk,
+  UsageMetadata,
 } from "@langchain/core/messages";
 import type {
   BaseLanguageModelInput,
@@ -107,13 +108,22 @@ export interface ChatMistralAICallOptions extends Omit<
    * @default {true}
    */
   streamUsage?: boolean;
+  /**
+   * Mistral only reuses cached prompt prefixes across requests sharing the
+   * same key. Use a stable id for requests that share a prefix, such as the
+   * LangGraph thread id (`config.configurable.thread_id`) or a user id.
+   * [Learn more](https://docs.mistral.ai/studio-api/conversations/advanced/prompt-caching).
+   */
+  promptCacheKey?: string;
 }
 
 /**
  * Input to chat model class.
  */
 export interface ChatMistralAIInput
-  extends BaseChatModelParams, Pick<ChatMistralAICallOptions, "streamUsage"> {
+  extends
+    BaseChatModelParams,
+    Pick<ChatMistralAICallOptions, "streamUsage" | "promptCacheKey"> {
   /**
    * The API key to use.
    * @default {process.env.MISTRAL_API_KEY}
@@ -400,6 +410,34 @@ export function convertMessagesToMistralMessages(
   }) as MistralAIMessage[];
 }
 
+/**
+ * The SDK has no typed field for prompt-cache hits, so it keeps Mistral's
+ * snake_case `prompt_tokens_details` as-is.
+ */
+export function _convertUsageToUsageMetadata(
+  usage?: MistralAITokenUsage | null
+): UsageMetadata | undefined {
+  if (!usage) {
+    return undefined;
+  }
+  const details = usage.prompt_tokens_details;
+  const cachedTokens =
+    typeof details === "object" &&
+    details !== null &&
+    "cached_tokens" in details &&
+    typeof details.cached_tokens === "number"
+      ? details.cached_tokens
+      : undefined;
+  return {
+    input_tokens: usage.promptTokens ?? 0,
+    output_tokens: usage.completionTokens ?? 0,
+    total_tokens: usage.totalTokens ?? 0,
+    ...(cachedTokens !== undefined && {
+      input_token_details: { cache_read: cachedTokens },
+    }),
+  };
+}
+
 function mistralAIResponseToChatMessage(
   choice: NonNullable<MistralAIChatCompletionResponse["choices"]>[0],
   usage?: MistralAITokenUsage
@@ -437,13 +475,7 @@ function mistralAIResponseToChatMessage(
         tool_calls: toolCalls,
         invalid_tool_calls: invalidToolCalls,
         additional_kwargs: {},
-        usage_metadata: usage
-          ? {
-              input_tokens: usage.promptTokens ?? 0,
-              output_tokens: usage.completionTokens ?? 0,
-              total_tokens: usage.totalTokens ?? 0,
-            }
-          : undefined,
+        usage_metadata: _convertUsageToUsageMetadata(usage),
       });
     }
     default:
@@ -463,13 +495,7 @@ function _convertDeltaToMessageChunk(
     if (usage) {
       return new AIMessageChunk({
         content: "",
-        usage_metadata: usage
-          ? {
-              input_tokens: usage.promptTokens ?? 0,
-              output_tokens: usage.completionTokens ?? 0,
-              total_tokens: usage.totalTokens ?? 0,
-            }
-          : undefined,
+        usage_metadata: _convertUsageToUsageMetadata(usage),
       });
     }
     return null;
@@ -522,13 +548,7 @@ function _convertDeltaToMessageChunk(
       content,
       tool_call_chunks: toolCallChunks,
       additional_kwargs,
-      usage_metadata: usage
-        ? {
-            input_tokens: usage.promptTokens ?? 0,
-            output_tokens: usage.completionTokens ?? 0,
-            total_tokens: usage.totalTokens ?? 0,
-          }
-        : undefined,
+      usage_metadata: _convertUsageToUsageMetadata(usage),
     });
   } else if (role === "tool") {
     return new ToolMessageChunk({
@@ -958,6 +978,8 @@ export class ChatMistralAI<
 
   streamUsage = true;
 
+  promptCacheKey?: string;
+
   beforeRequestHooks?: Array<BeforeRequestHook>;
 
   requestErrorHooks?: Array<RequestErrorHook>;
@@ -1006,6 +1028,7 @@ export class ChatMistralAI<
     this.httpClient = fields.httpClient;
     this.model = fields.model ?? fields.modelName ?? this.model;
     this.streamUsage = fields.streamUsage ?? this.streamUsage;
+    this.promptCacheKey = fields.promptCacheKey;
     this.beforeRequestHooks =
       fields.beforeRequestHooks ?? this.beforeRequestHooks;
     this.requestErrorHooks = fields.requestErrorHooks ?? this.requestErrorHooks;
@@ -1069,6 +1092,7 @@ export class ChatMistralAI<
       presencePenalty: this.presencePenalty,
       frequencyPenalty: this.frequencyPenalty,
       n: this.numCompletions,
+      promptCacheKey: options?.promptCacheKey ?? this.promptCacheKey,
     };
     return params;
   }
