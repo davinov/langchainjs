@@ -1275,3 +1275,33 @@ test("Test ChatMistralAI can remove all hooks", async () => {
   // console.log(count);
   expect(count).toEqual(2);
 });
+
+test("Test ChatMistralAI reports prompt cache hits", async () => {
+  const model = new ChatMistralAI({
+    model: "mistral-small-latest",
+    maxTokens: 5,
+    // Unique per run, so the first call can't hit a previous run's cache.
+    promptCacheKey: `langchainjs-int-test-${Date.now()}`,
+  });
+  // Mistral caches 64-token blocks; this prefix is ~1.5k tokens.
+  const messages = [
+    new SystemMessage(
+      `You are a helpful assistant. ${"Revenue tables have region, quarter and amount columns. ".repeat(150)}`
+    ),
+    new HumanMessage("Say ok."),
+  ];
+
+  await model.invoke(messages);
+  const res = await model.invoke(messages);
+  expect(res.usage_metadata?.input_token_details?.cache_read).toBeGreaterThan(
+    0
+  );
+
+  let aggregate: AIMessageChunk | undefined;
+  for await (const chunk of await model.stream(messages)) {
+    aggregate = aggregate ? aggregate.concat(chunk) : chunk;
+  }
+  expect(
+    aggregate?.usage_metadata?.input_token_details?.cache_read
+  ).toBeGreaterThan(0);
+});

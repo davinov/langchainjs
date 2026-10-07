@@ -16,6 +16,7 @@ import {
   _mistralContentChunkToMessageContentComplex,
 } from "../utils.js";
 import { ChatCompletionRequest } from "@mistralai/mistralai/models/components/chatcompletionrequest.js";
+import { HTTPClient } from "@mistralai/mistralai/lib/http.js";
 
 describe("Mistral Tool Call ID Conversion", () => {
   test("valid and invalid Mistral tool call IDs", () => {
@@ -344,5 +345,117 @@ describe("Streaming", () => {
     expect(capturedStreamParam).toBe(true);
     expect(chunks.length).toBe(2);
     expect(chunks.join("")).toBe("Hello world!");
+  });
+});
+
+describe("Prompt caching", () => {
+  const usage = {
+    prompt_tokens: 1013,
+    completion_tokens: 30,
+    total_tokens: 1043,
+    prompt_tokens_details: { cached_tokens: 1008 },
+  };
+
+  function mockFetch(response: () => Response) {
+    const bodies: Record<string, unknown>[] = [];
+    const httpClient = new HTTPClient({
+      fetcher: async (input) => {
+        bodies.push(await (input as Request).json());
+        return response();
+      },
+    });
+    return { bodies, httpClient };
+  }
+
+  test("sends promptCacheKey and reports cache hits", async () => {
+    const { bodies, httpClient } = mockFetch(() =>
+      Response.json({
+        id: "1",
+        object: "chat.completion",
+        model: "mistral-large-latest",
+        created: 0,
+        usage,
+        choices: [
+          {
+            index: 0,
+            finish_reason: "stop",
+            message: { role: "assistant", content: "Hi" },
+          },
+        ],
+      })
+    );
+    const model = new ChatMistralAI({
+      apiKey: "test-api-key",
+      model: "mistral-large-latest",
+      promptCacheKey: "conversation-1",
+      httpClient,
+    });
+
+    const message = await model.invoke("Hello");
+
+    expect(bodies[0].prompt_cache_key).toBe("conversation-1");
+    expect(message.usage_metadata).toEqual({
+      input_tokens: 1013,
+      output_tokens: 30,
+      total_tokens: 1043,
+      input_token_details: { cache_read: 1008 },
+    });
+  });
+
+  test("call option overrides the instance promptCacheKey", async () => {
+    const model = new ChatMistralAI({
+      apiKey: "test-api-key",
+      promptCacheKey: "default",
+    });
+    expect(
+      model.invocationParams({ promptCacheKey: "per-call" } as never)
+        .promptCacheKey
+    ).toBe("per-call");
+  });
+
+  test("reports cache hits when streaming", async () => {
+    const chunk = {
+      id: "1",
+      object: "chat.completion.chunk",
+      model: "mistral-large-latest",
+      created: 0,
+    };
+    const sse = [
+      {
+        ...chunk,
+        choices: [
+          {
+            index: 0,
+            delta: { role: "assistant", content: "Hi" },
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        ...chunk,
+        usage,
+        choices: [{ index: 0, delta: { content: "" }, finish_reason: "stop" }],
+      },
+    ]
+      .map((data) => `data: ${JSON.stringify(data)}\n\n`)
+      .join("");
+    const { httpClient } = mockFetch(
+      () =>
+        new Response(`${sse}data: [DONE]\n\n`, {
+          headers: { "content-type": "text/event-stream" },
+        })
+    );
+    const model = new ChatMistralAI({
+      apiKey: "test-api-key",
+      model: "mistral-large-latest",
+      httpClient,
+    });
+
+    let full: AIMessageChunk | undefined;
+    for await (const c of await model.stream("Hello")) {
+      full = full ? full.concat(c) : c;
+    }
+
+    expect(full?.usage_metadata?.input_token_details?.cache_read).toBe(1008);
   });
 });
