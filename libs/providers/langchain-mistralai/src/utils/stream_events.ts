@@ -16,6 +16,21 @@ export type MistralStreamData = Record<string, any>;
 
 export interface ConvertMistralStreamOptions extends ConvertOpenAICompletionsStreamOptions {}
 
+/**
+ * The SDK camelCases the usage counts but keeps `prompt_tokens_details` as
+ * Mistral sent it; the OpenAI stream converter expects snake_case for both.
+ */
+function mistralUsageToOpenAIUsage(
+  usage: MistralStreamData
+): OpenAICompletionsStreamChunk["usage"] {
+  return {
+    prompt_tokens: usage.promptTokens ?? usage.prompt_tokens,
+    completion_tokens: usage.completionTokens ?? usage.completion_tokens,
+    total_tokens: usage.totalTokens ?? usage.total_tokens,
+    prompt_tokens_details: usage.prompt_tokens_details,
+  };
+}
+
 function mistralDataToOpenAIChunk(
   data: MistralStreamData
 ): OpenAICompletionsStreamChunk {
@@ -62,7 +77,7 @@ function mistralDataToOpenAIChunk(
         logprobs: choice.logprobs ?? null,
       },
     ],
-    usage: data.usage ?? null,
+    usage: data.usage ? mistralUsageToOpenAIUsage(data.usage) : null,
     system_fingerprint: data.system_fingerprint ?? null,
   };
 }

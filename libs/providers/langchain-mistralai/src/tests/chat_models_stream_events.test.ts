@@ -99,6 +99,14 @@ function mistralToolChunks() {
   ];
 }
 
+// Shaped like the SDK's parsed usage: camelCased counts, raw details.
+const mistralUsage = {
+  promptTokens: 1013,
+  completionTokens: 30,
+  totalTokens: 1043,
+  prompt_tokens_details: { cached_tokens: 1008 },
+};
+
 function mockMistral(chunks: Record<string, unknown>[]) {
   const model = new ChatMistralAI({
     apiKey: "fake-key",
@@ -134,5 +142,16 @@ describe("ChatMistralAI.streamEvents", () => {
     ).toHaveStreamToolCalls([
       { name: "web_search", args: { query: "weather" } },
     ]);
+  });
+
+  test("streams usage, including cache hits", async () => {
+    const chunks = mistralTextChunks();
+    chunks[chunks.length - 1].usage = mistralUsage;
+    await expect(mockMistral(chunks).streamEvents("Hello")).toHaveStreamUsage({
+      input_tokens: 1013,
+      output_tokens: 30,
+      total_tokens: 1043,
+      input_token_details: { cache_read: 1008 },
+    });
   });
 });
