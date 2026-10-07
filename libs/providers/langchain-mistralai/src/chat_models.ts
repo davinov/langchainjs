@@ -91,6 +91,8 @@ interface TokenUsage {
 
 type ChatMistralAIToolType = MistralAIToolCall | MistralAITool | BindToolsInput;
 
+type MistralAIFunctionTool = MistralAITool & { type: "function" };
+
 export interface ChatMistralAICallOptions extends Omit<
   BaseLanguageModelCallOptions,
   "stop"
@@ -546,7 +548,7 @@ function _convertDeltaToMessageChunk(
 
 function _convertToolToMistralTool(
   tools: ChatMistralAIToolType[]
-): MistralAITool[] | undefined {
+): MistralAIFunctionTool[] | undefined {
   if (!tools || !tools.length) {
     return undefined;
   }
@@ -554,7 +556,7 @@ function _convertToolToMistralTool(
     // If already a MistralAITool with a 'function' property, return as is
     if ("function" in tool) {
       return {
-        type: tool.type ?? "function",
+        type: "function",
         function: tool.function,
       };
     }
@@ -1051,7 +1053,7 @@ export class ChatMistralAI<
     "messages"
   > {
     const { response_format, tools, tool_choice } = options ?? {};
-    const mistralAITools: Array<MistralAITool> | undefined = tools?.length
+    const mistralAITools: MistralAIFunctionTool[] | undefined = tools?.length
       ? _convertToolToMistralTool(tools)
       : undefined;
     const params: Omit<MistralAIChatCompletionRequest, "messages"> = {
